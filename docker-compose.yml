@@ -1,0 +1,95 @@
+
+version: '2'
+
+services:
+    postgres:
+        image: thebiftek/postgres
+        hostname: evefleet-postgres
+        environment:
+            - POSTGRES_DB=${POSTGRES_DB}
+            - POSTGRES_USER=${POSTGRES_USER}
+            - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+        volumes:
+            - ./image/dump:/docker-entrypoint-initdb.d
+            - ./storage/postgres:/var/lib/postgresql/data
+
+    redis:
+        image: redis:alpine
+        hostname: evefleet-redis
+        volumes:
+            - ./storage/redis:/data
+
+    nginx:
+        image: nginx:stable
+        hostname: evefleet-nginx
+        restart: always
+        environment:
+            - VIRTUAL_HOST=${V_HOSTS}
+        ports:
+            - 80
+        volumes:
+            - ./nginx/conf:/etc/nginx/conf.d
+            - ${CODE_PATH}:/code
+        links:
+            - php
+        depends_on:
+            - php
+        networks:
+            - default
+            - nginx-proxy
+
+    php:
+        image: thebiftek/php
+        hostname: evefleet-php
+        user: ${USER_ID}:${GROUP_ID}
+        expose:
+            - 9000
+        restart: always
+        volumes:
+            - ./php/conf/php.ini:/usr/local/etc/php/conf.d/custom.ini
+            - ${CODE_PATH}:/code
+        links:
+            - postgres
+            - redis
+
+    adminer:
+        image: clue/adminer
+        links:
+            - postgres
+        environment:
+            - VIRTUAL_HOST=${ADMINER_V_HOST}
+        networks:
+            - default
+            - nginx-proxy
+
+    rabbitmq:
+        image: rabbitmq:3-management
+        hostname: evefleet-rabbitmq
+        environment:
+            - RABBITMQ_ERLANG_COOKIE=${RABBITMQ_ERLANG_COOKIE}
+            - RABBITMQ_DEFAULT_USER=${RABBITMQ_DEFAULT_USER}
+            - RABBITMQ_DEFAULT_PASS=${RABBITMQ_DEFAULT_PASS}
+            - VIRTUAL_HOST=${RABBITMQ_V_HOST}
+            - VIRTUAL_PORT=15672
+        ports:
+            - 15672:15672
+        networks:
+            - default
+            - nginx-proxy
+
+    worker:
+        image: thebiftek/php
+        hostname: evefleet-worker
+        user: ${USER_ID}:${GROUP_ID}
+        command: wait-for-it rabbitmq:5672 -t 30 -- php /code/www/index.php rabbitmq:consumer -m 100 -w multiUpdater
+        volumes:
+            - ${CODE_PATH}:/code
+        links:
+            - redis
+            - postgres
+            - rabbitmq
+
+networks:
+    nginx-proxy:
+        external:
+          name: nginx-proxy
